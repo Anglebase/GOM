@@ -1,0 +1,10 @@
+[package]
+name = "gom"
+version = "0.1.0"
+edition = "2021"
+description = "A simple Rust global object manager"
+license = "MIT"
+repository = "https://github.com/Anglebase/GOM.git"
+
+[dependencies]
+lazy_static = "1.5.0"
