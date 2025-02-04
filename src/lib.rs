@@ -107,3 +107,18 @@ impl<T: Send + 'static> Registry<T> {
         map.remove(key)
     }
 }
+
+/// Make a unique identifier string from a root and a path
+#[macro_export]
+macro_rules! id {
+    ($($x:ident).+) => {
+        concat!($('.', stringify!($x)),+)
+    };
+    (@ $root:ident . $($x:ident).+) => {
+        {
+            const ROOT: &str = $root;
+            const PATH: &str = concat!($('.', stringify!($x)),+);
+            constcat::concat!(ROOT, PATH)
+        }
+    }
+}

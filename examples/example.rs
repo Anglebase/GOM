@@ -1,15 +1,17 @@
-use gom::Registry;
+use gom::{id, Registry};
 
 #[derive(Debug)]
 struct Object(i32);
 
 fn main() {
-    Registry::register("Number1", 12i64);
+    const NUMBER: &str = id!(Number);
+    Registry::register(id!(@NUMBER.one), 12i64);
     Registry::register("Number2", 34i32);
 
     println!(
-        "Number1: {}",
-        Registry::<i64>::apply("Number1", |x| *x).unwrap()
+        "{}: {}",
+        id!(@NUMBER.one),
+        Registry::<i64>::apply(id!(@NUMBER.one), |x| *x).unwrap()
     );
 
     Registry::register("Object1", Object(56));

@@ -7,4 +7,5 @@ license = "MIT"
 repository = "https://github.com/Anglebase/GOM.git"
 
 [dependencies]
+constcat = "0.6.0"
 lazy_static = "1.5.0"
