@@ -5,29 +5,19 @@ This is a simple global object manager that makes it easier for you to use globa
 # Example
 
 ```rust
-use gom::Registry;
+use gom::*;
 
-#[derive(Debug)]
-struct Object(i32);
+const VEC: &str = id!(Vec);
+const ID: &str = id!(@VEC.Bar);
 
 fn main() {
-    Registry::register("Number1", 12i64);
-    Registry::register("Number2", 34i32);
+    Registry::register(ID, vec![1, 2, 3]);
 
-    println!(
-        "Number1: {}",
-        Registry::<i64>::apply("Number1", |x| *x).unwrap()
-    );
-
-    Registry::register("Object1", Object(56));
-
-    Registry::apply("Object1", |obj: &mut Object| {
-        obj.0 = 78;
+    Registry::<Vec<i32>>::apply(ID, |v| {
+        v.push(4);
     });
 
-    println!(
-        "Object1: {:?}",
-        Registry::<Object>::remove("Object1").unwrap()
-    );
+    let v = Registry::<Vec<i32>>::remove(ID);
+    println!("{:?}", v);
 }
 ```
