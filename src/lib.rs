@@ -56,6 +56,8 @@ impl<T: Send + 'static> Registry<T> {
 
     /// Apply a function to the value with the given key
     ///
+    /// **If this function is nested, it will cause thread deadlock.**
+    ///
     /// If the key does not exist, the function will not be called and `None` will be returned.
     ///
     /// # Returns
@@ -81,7 +83,7 @@ impl<T: Send + 'static> Registry<T> {
     }
 
     /// Get the value with the given key and reomve it from the registry
-    ///
+    /// 
     /// If the key does not exist, `None` will be returned.
     ///
     /// # Returns
@@ -106,16 +108,42 @@ impl<T: Send + 'static> Registry<T> {
         // Get value
         map.remove(key)
     }
+
+    /// Apply a function to the value with the given key
+    /// 
+    /// **This function will not cause thread deadlocks.**
+    /// 
+    /// If the key does not exist, the function will not be called and `None` will be returned.
+    /// 
+    /// In the context of 'with', the value cannot be retrieved again.
+    ///
+    /// # Returns
+    /// `Some(R)` if the key exists and the function was applied successfully, `None` otherwise.
+    ///
+    /// # Example
+    /// ```rust
+    /// use gom::Registry;
+    ///
+    /// Registry::register("key", 123);
+    /// let value = Registry::<i32>::with("key", |v| *v + 1);
+    /// assert_eq!(value, Some(124));
+    /// ```
+    pub fn with<R, F: FnOnce(&mut T) -> R>(key: &str, f: F) -> Option<R> {
+        let mut value = Self::remove(key)?;
+        let result = f(&mut value);
+        Self::register(key, value);
+        Some(result)
+    }
 }
 
 /// Make a identifier string with the given path
-/// 
+///
 /// ```rust
 /// use gom::id;
-/// 
+///
 /// const MY_ID: &str = id!(my.module.MyType);
 /// const OTHER_ID: &str = id!(@MY_ID.other.OtherType);
-/// 
+///
 /// assert_eq!(MY_ID, ".my.module.MyType");
 /// assert_eq!(OTHER_ID, ".my.module.MyType.other.OtherType");
 /// ```
