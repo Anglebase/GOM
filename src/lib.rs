@@ -136,6 +136,10 @@ impl<T: Send + 'static> Registry<T> {
     }
 }
 
+#[allow(unused_imports)]
+#[macro_use]
+extern crate constcat;
+
 /// Make a identifier string with the given path
 ///
 /// ```rust
