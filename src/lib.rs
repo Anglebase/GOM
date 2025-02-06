@@ -108,7 +108,17 @@ impl<T: Send + 'static> Registry<T> {
     }
 }
 
-/// Make a unique identifier string from a root and a path
+/// Make a identifier string with the given path
+/// 
+/// ```rust
+/// use gom::id;
+/// 
+/// const MY_ID: &str = id!(my.module.MyType);
+/// const OTHER_ID: &str = id!(@MY_ID.other.OtherType);
+/// 
+/// assert_eq!(MY_ID, ".my.module.MyType");
+/// assert_eq!(OTHER_ID, ".my.module.MyType.other.OtherType");
+/// ```
 #[macro_export]
 macro_rules! id {
     ($($x:ident).+) => {
