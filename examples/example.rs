@@ -1,27 +1,15 @@
-use gom::{id, Registry};
+use gom::*;
 
-#[derive(Debug)]
-struct Object(i32);
+const VEC: &str = id!(Vec);
+const ID: &str = id!(@VEC.Bar);
 
 fn main() {
-    const NUMBER: &str = id!(Number);
-    Registry::register(id!(@NUMBER.one), 12i64);
-    Registry::register("Number2", 34i32);
+    Registry::register(ID, vec![1, 2, 3]);
 
-    println!(
-        "{}: {}",
-        id!(@NUMBER.one),
-        Registry::<i64>::apply(id!(@NUMBER.one), |x| *x).unwrap()
-    );
-
-    Registry::register("Object1", Object(56));
-
-    Registry::apply("Object1", |obj: &mut Object| {
-        obj.0 = 78;
+    Registry::<Vec<i32>>::apply(ID, |v| {
+        v.push(4);
     });
 
-    println!(
-        "Object1: {:?}",
-        Registry::<Object>::remove("Object1").unwrap()
-    );
+    let v = Registry::<Vec<i32>>::remove(ID);
+    println!("{:?}", v);
 }
