@@ -2,6 +2,13 @@
 
 This is a simple global object manager that makes it easier for you to use global objects in Rust.
 
+# Note
+
+You need to add crate `constcat` to support macro `id!(...)`. 
+
+<i style="color:orange">This is a flaw in Rust.</i>
+
+
 # Example
 
 ```rust
