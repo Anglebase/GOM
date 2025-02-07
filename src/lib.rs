@@ -83,7 +83,7 @@ impl<T: Send + 'static> Registry<T> {
     }
 
     /// Get the value with the given key and reomve it from the registry
-    /// 
+    ///
     /// If the key does not exist, `None` will be returned.
     ///
     /// # Returns
@@ -110,11 +110,11 @@ impl<T: Send + 'static> Registry<T> {
     }
 
     /// Apply a function to the value with the given key
-    /// 
+    ///
     /// **This function will not cause thread deadlocks.**
-    /// 
+    ///
     /// If the key does not exist, the function will not be called and `None` will be returned.
-    /// 
+    ///
     /// In the context of 'with', the value cannot be retrieved again.
     ///
     /// # Returns
@@ -133,6 +133,56 @@ impl<T: Send + 'static> Registry<T> {
         let result = f(&mut value);
         Self::register(key, value);
         Some(result)
+    }
+
+    fn _exists(key: &str) -> Option<bool> {
+        let registry = REGISTRY.lock().unwrap();
+        let map = registry
+            .get(&TypeId::of::<T>())?
+            .downcast_ref::<HashMap<String, T>>()?;
+        Some(map.contains_key(key))
+    }
+
+    /// Check if the key exists in the registry
+    ///
+    /// # Returns
+    /// `true` if the key exists, `false` otherwise.
+    ///
+    /// # Example
+    /// ```rust
+    /// use gom::Registry;
+    ///
+    /// Registry::register("key", 123);
+    /// assert_eq!(Registry::<i32>::exists("key"), true);
+    /// assert_eq!(Registry::<i32>::exists("other"), false);
+    /// ```
+    pub fn exists(key: &str) -> bool {
+        Self::_exists(key).unwrap_or(false)
+    }
+
+    /// Take the value with the given key and replace it with the given value
+    ///
+    /// If the key does not exist, the value will be registered instead.
+    ///
+    /// # Returns
+    /// `Some(T)` if the key exists, `None` otherwise.
+    ///
+    /// # Example
+    /// ```rust
+    /// use gom::Registry;
+    ///
+    /// Registry::register("key", 123);
+    /// let value = Registry::<i32>::take("key", 456);
+    /// assert_eq!(value, Some(123));
+    /// let value = Registry::<i32>::take("key", 789);
+    /// assert_eq!(value, Some(456));
+    /// let value = Registry::<i32>::take("other", 101112);
+    /// assert_eq!(value, None);
+    /// ```
+    pub fn take(key: &str, value: T) -> Option<T> {
+        let before_value = Self::remove(key);
+        Self::register(key, value);
+        before_value
     }
 }
 
