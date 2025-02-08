@@ -1,5 +1,7 @@
+use core::panic;
 use std::{
     any::{Any, TypeId},
+    cell::RefCell,
     collections::HashMap,
     marker::PhantomData,
     sync::RwLock,
@@ -7,23 +9,134 @@ use std::{
 
 use lazy_static::lazy_static;
 
+macro_rules! thread_deadlock {
+    () => {
+        panic!("Thread deadlock!")
+    };
+}
+
 lazy_static! {
     static ref _TABLE: RwLock<HashMap<TypeId, RwLock<HashMap<String, RwLock<Box<dyn Any + Send + Sync>>>>>> =
         RwLock::new(HashMap::new());
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Context {
+    With(String, TypeId),
+    Apply(String, TypeId),
+}
+
+enum Lock {
+    Global,
+    Type,
+    Key,
+}
+
+thread_local! {
+    // 上下文访问栈
+    static CONTEXT: RefCell<Vec<Context>> = RefCell::new(Vec::new());
+}
+
+struct ContextOperator;
+impl ContextOperator {
+    fn push(ctx: Context) {
+        CONTEXT.with(|ctx_cell| {
+            ctx_cell.borrow_mut().push(ctx);
+        });
+    }
+
+    fn pop() {
+        CONTEXT.with(|ctx_cell| ctx_cell.borrow_mut().pop());
+    }
+
+    fn cannot_lock_write_lock<T: 'static>(name: &str, lock: Lock) -> bool {
+        match lock {
+            Lock::Global => CONTEXT.with_borrow(|v| !v.is_empty()),
+            Lock::Type => CONTEXT.with_borrow(|v| {
+                v.iter().any(|x| match x {
+                    Context::With(_, type_id) | Context::Apply(_, type_id) => {
+                        type_id == &TypeId::of::<T>()
+                    }
+                })
+            }),
+            Lock::Key => CONTEXT.with_borrow(|v| {
+                v.iter().any(|x| match x {
+                    Context::With(key, type_id) | Context::Apply(key, type_id) => {
+                        key == name && type_id == &TypeId::of::<T>()
+                    }
+                })
+            }),
+        }
+    }
+}
+
+// 检查如果获取写锁是否会导致死锁
+fn check_write_deadlock<T: 'static>(name: &str, lock: Lock) {
+    if ContextOperator::cannot_lock_write_lock::<T>(name, lock) {
+        thread_deadlock!();
+    }
+}
+
+// 检查如果获取读锁是否会导致死锁
+fn check_read_deadlock<T: 'static>(name: &str) {
+    if CONTEXT.with_borrow(|v| {
+        v.iter().any(|x| match x {
+            Context::Apply(s, type_id) => s == name && type_id == &TypeId::of::<T>(),
+            _ => false,
+        })
+    }) {
+        thread_deadlock!();
+    }
+}
+
+#[cfg(debug_assertions)]
+macro_rules! check_deadlock {
+    (mut $type:ty : $name:expr ; $em:expr) => {
+        $crate::check_write_deadlock::<$type>($name, $em);
+    };
+    (ref $type:ty : $name:expr) => {
+        $crate::check_read_deadlock::<$type>($name);
+    };
+}
+
+#[cfg(not(debug_assertions))]
+macro_rules! check_deadlock {
+    (mut $type:ty : $name:expr ; $em:expr) => {};
+    (ref $type:ty : $name:expr) => {};
+}
+
 /// 用于访问注册表的类型
 ///
-/// 注册表的索引方式是：`类型-键` 唯一，因而同一个键可以对应多个不同类型的值
+/// # 注解
+///
+/// + 其索引方式是：`类型-键` 唯一，因而同一个键可以对应多个不同类型的值
+/// + 如果闭包中使用了不恰当的嵌套，可能会导致线程死锁
 pub struct Registry<T> {
     _marker: PhantomData<T>,
 }
 
 impl<T: 'static + Send + Sync + Any> Registry<T> {
+    fn _register(name: &str, value: T) -> Option<()> {
+        let type_id = TypeId::of::<T>();
+        let has_type = {
+            let map = _TABLE.read().ok()?;
+            map.contains_key(&type_id)
+        };
+        if !has_type {
+            check_deadlock!(mut T:name;Lock::Global);
+            let mut map = _TABLE.write().ok()?;
+            map.insert(type_id, RwLock::new(HashMap::new()));
+        }
+        let map = _TABLE.read().ok()?;
+        check_deadlock!(mut T:name;Lock::Type);
+        let mut type_map = map.get(&type_id)?.write().ok()?;
+        type_map.insert(String::from(name), RwLock::new(Box::new(value)));
+        Some(())
+    }
+
     /// 向注册表中注册一个新值
     ///
     /// 如果相同的键已存在，那么旧值将会被新值替换
-    /// 如果操作失败，则返回 `None`
     ///
     /// # 示例
     ///
@@ -33,20 +146,8 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
     /// Registry::<i32>::register("my_key", 42);
     /// Registry::register("my_key", 64);
     /// ```
-    pub fn register(name: &str, value: T) -> Option<()> {
-        let type_id = TypeId::of::<T>();
-        let has_type = {
-            let map = _TABLE.read().ok()?;
-            map.contains_key(&type_id)
-        };
-        if !has_type {
-            let mut map = _TABLE.write().ok()?;
-            map.insert(type_id, RwLock::new(HashMap::new()));
-        }
-        let map = _TABLE.read().ok()?;
-        let mut type_map = map.get(&type_id)?.write().ok()?;
-        type_map.insert(String::from(name), RwLock::new(Box::new(value)));
-        Some(())
+    pub fn register(name: &str, value: T) -> Result<(), ()> {
+        Self::_register(name, value).ok_or(())
     }
 
     /// 从注册表中移除指定键对应的值
@@ -67,6 +168,7 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
         let lock_value = {
             let map = _TABLE.read().ok()?;
             let type_map = map.get(&type_id)?;
+            check_deadlock!(mut T:name;Lock::Type);
             let mut type_map = type_map.write().ok()?;
             type_map.remove(name)?
         };
@@ -114,9 +216,13 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
         let type_id = TypeId::of::<T>();
         let type_map = _TABLE.read().ok()?;
         let type_map = type_map.get(&type_id)?.read().ok()?;
+        check_deadlock!(mut T:name;Lock::Key);
         let mut value = type_map.get(name)?.write().ok()?;
         let var = value.downcast_mut::<T>()?;
-        Some(func(var))
+        ContextOperator::push(Context::Apply(String::from(name), type_id));
+        let ret = Some(func(var));
+        ContextOperator::pop();
+        ret
     }
 
     /// 向注册表中的指定键应用一个函数，该函数仅能读取注册表中的值
@@ -135,9 +241,13 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
         let type_id = TypeId::of::<T>();
         let type_map = _TABLE.read().ok()?;
         let type_map = type_map.get(&type_id)?.read().ok()?;
+        check_deadlock!(ref T:name);
         let value = type_map.get(name)?.read().ok()?;
         let var = value.downcast_ref::<T>()?;
-        Some(func(var))
+        ContextOperator::push(Context::With(String::from(name), type_id));
+        let ret = Some(func(var));
+        ContextOperator::pop();
+        ret
     }
 
     /// 使用新值替换注册表中的指定键对应的值
@@ -157,6 +267,7 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
         let type_map = _TABLE.read().ok()?;
         let type_map = type_map.get(&type_id)?;
         let value = {
+            check_deadlock!(mut T:name;Lock::Type);
             let mut type_map = type_map.write().ok()?;
             let ret = type_map.remove(name)?;
             type_map.insert(String::from(name), RwLock::new(Box::new(value)));
