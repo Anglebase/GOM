@@ -12,7 +12,7 @@ fn note(text: &str) -> String {
         let note = Note {
             text: Default::default(),
         };
-        Registry::register(NOTE, note);
+        Registry::register(NOTE, note).unwrap();
     }
     Registry::<Note>::apply(NOTE, |t| {
         let ret = t.text.clone();
