@@ -13,44 +13,48 @@ lazy_static! {
 }
 
 /// 用于访问注册表的类型
+///
+/// 注册表的索引方式是：`类型-键` 唯一，因而同一个键可以对应多个不同类型的值
 pub struct Registry<T> {
     _marker: PhantomData<T>,
 }
 
 impl<T: 'static + Send + Sync + Any> Registry<T> {
     /// 向注册表中注册一个新值
-    /// 
+    ///
     /// 如果相同的键已存在，那么旧值将会被新值替换
-    /// 
+    /// 如果操作失败，则返回 `None`
+    ///
     /// # 示例
-    /// 
+    ///
     /// ```rust
     /// use gom::Registry;
     ///
     /// Registry::<i32>::register("my_key", 42);
     /// Registry::register("my_key", 64);
     /// ```
-    pub fn register(name: &str, value: T) {
+    pub fn register(name: &str, value: T) -> Option<()> {
         let type_id = TypeId::of::<T>();
         let has_type = {
-            let map = _TABLE.read().unwrap();
+            let map = _TABLE.read().ok()?;
             map.contains_key(&type_id)
         };
         if !has_type {
-            let mut map = _TABLE.write().unwrap();
+            let mut map = _TABLE.write().ok()?;
             map.insert(type_id, RwLock::new(HashMap::new()));
         }
-        let map = _TABLE.read().unwrap();
-        let mut type_map = map.get(&type_id).unwrap().write().unwrap();
+        let map = _TABLE.read().ok()?;
+        let mut type_map = map.get(&type_id)?.write().ok()?;
         type_map.insert(String::from(name), RwLock::new(Box::new(value)));
+        Some(())
     }
 
     /// 从注册表中移除指定键对应的值
-    /// 
+    ///
     /// 如果键不存在，则返回 `None`
-    /// 
+    ///
     /// # 示例
-    /// 
+    ///
     /// ```rust
     /// use gom::Registry;
     ///
@@ -80,9 +84,9 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
     }
 
     /// 判断指定键是否存在于注册表中
-    /// 
+    ///
     /// # 示例
-    /// 
+    ///
     /// ```rust
     /// use gom::Registry;
     ///
@@ -95,13 +99,13 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
     }
 
     /// 向注册表中的指定键应用一个函数，该函数可以修改注册表中的值
-    /// 
+    ///
     /// 如果键不存在，则返回 `None`；否则，返回闭包函数的返回值
-    /// 
+    ///
     /// # 示例
     /// ```rust
     /// use gom::Registry;
-    /// 
+    ///
     /// Registry::<i32>::register("my_key", 42);
     /// assert_eq!(Registry::<i32>::apply("my_key", |v| { *v += 1; *v }), Some(43));
     /// assert_eq!(Registry::<i32>::apply("other_key", |v| *v += 1), None);
@@ -116,13 +120,13 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
     }
 
     /// 向注册表中的指定键应用一个函数，该函数仅能读取注册表中的值
-    /// 
+    ///
     /// 如果键不存在，则返回 `None`；否则，返回闭包函数的返回值
-    /// 
+    ///
     /// # 示例
     /// ```rust
     /// use gom::Registry;
-    /// 
+    ///
     /// Registry::<i32>::register("my_key", 42);
     /// assert_eq!(Registry::<i32>::with("my_key", |v| *v), Some(42));
     /// assert_eq!(Registry::<i32>::with("other_key", |v| *v), None);
@@ -137,13 +141,13 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
     }
 
     /// 使用新值替换注册表中的指定键对应的值
-    /// 
+    ///
     /// 如果键不存在，则返回 `None` 并且不会注册新值；否则，返回旧值
-    /// 
+    ///
     /// # 示例
     /// ```rust
     /// use gom::Registry;
-    /// 
+    ///
     /// Registry::<i32>::register("my_key", 42);
     /// assert_eq!(Registry::<i32>::replace("my_key", 64), Some(42));
     /// assert_eq!(Registry::<i32>::replace("other_key", 32), None);
