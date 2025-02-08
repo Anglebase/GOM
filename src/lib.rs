@@ -113,10 +113,6 @@ macro_rules! id {
         concat!($('.', stringify!($x)),+)
     };
     (@ $root:ident . $($x:ident).+) => {
-        {
-            const ROOT: &str = $root;
-            const PATH: &str = concat!($('.', stringify!($x)),+);
-            constcat::concat!(ROOT, PATH)
-        }
+        constcat::concat!($root, concat!($('.', stringify!($x)),+))
     }
 }
