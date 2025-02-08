@@ -9,7 +9,7 @@ fn main() {
 
     Registry::<i32>::with(ID1, |v| {
         println!("id1: {}", v);
-        Registry::register("id3", 2).unwrap();
+        Registry::register("id3", 2.9).unwrap();
     });
 
     Registry::<f64>::with("id3", |f| {
