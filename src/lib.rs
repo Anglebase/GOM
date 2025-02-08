@@ -1,188 +1,98 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    sync::Mutex,
+    marker::PhantomData,
+    sync::RwLock,
 };
 
 use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref REGISTRY: Mutex<HashMap<TypeId, Box<dyn Any + Send>>> = Mutex::new(HashMap::new());
+    static ref _TABLE: RwLock<HashMap<TypeId, RwLock<HashMap<String, RwLock<Box<dyn Any + Send + Sync>>>>>> =
+        RwLock::new(HashMap::new());
 }
 
-/// Global Object Registry Visitor
-///
-/// This struct is used to register and access global objects of a specific type.
-///
-/// # Example
-/// ```rust
-/// use gom::Registry;
-///
-/// Registry::register("key", 123);
-/// let value = Registry::<i32>::apply("key", |v| *v + 1);
-/// assert_eq!(value, Some(124));
-/// ```
 pub struct Registry<T> {
-    _use: Option<T>,
+    _marker: PhantomData<T>,
 }
 
-impl<T: Send + 'static> Registry<T> {
-    /// Register a new value with the given key
-    ///
-    /// If the key already exists in the same type, the value will be overwritten.
-    ///
-    /// # Example
-    /// ```rust
-    /// use gom::Registry;
-    ///
-    /// Registry::register("key", 123);
-    /// ```
-    pub fn register(key: &str, value: T) {
-        let mut registry = REGISTRY.lock().unwrap();
-        // Check if the map already exists for this type
-        if !registry.contains_key(&TypeId::of::<T>()) {
-            let map: HashMap<String, T> = HashMap::new();
-            registry.insert(TypeId::of::<T>(), Box::new(map));
+impl<T: 'static + Send + Sync + Any> Registry<T> {
+    pub fn register(name: &str, value: T) {
+        let type_id = TypeId::of::<T>();
+        let has_type = {
+            let map = _TABLE.read().unwrap();
+            map.contains_key(&type_id)
+        };
+        if !has_type {
+            let mut map = _TABLE.write().unwrap();
+            map.insert(type_id, RwLock::new(HashMap::new()));
         }
-        // Get type map
-        let map = registry
-            .get_mut(&TypeId::of::<T>())
-            .unwrap()
-            .downcast_mut::<HashMap<String, T>>()
-            .unwrap();
-        // Insert the value into the map
-        map.insert(key.to_string(), value);
+        let map = _TABLE.read().unwrap();
+        let mut type_map = map.get(&type_id).unwrap().write().unwrap();
+        type_map.insert(String::from(name), RwLock::new(Box::new(value)));
     }
 
-    /// Apply a function to the value with the given key
-    ///
-    /// **If this function is nested, it will cause thread deadlock.**
-    ///
-    /// If the key does not exist, the function will not be called and `None` will be returned.
-    ///
-    /// # Returns
-    /// `Some(R)` if the key exists and the function was applied successfully, `None` otherwise.
-    ///
-    /// # Example
-    /// ```rust
-    /// use gom::Registry;
-    ///
-    /// Registry::register("key", 123);
-    /// let value = Registry::<i32>::apply("key", |v| *v + 1);
-    /// assert_eq!(value, Some(124));
-    /// ```
-    pub fn apply<R, F: FnOnce(&mut T) -> R>(key: &str, f: F) -> Option<R> {
-        let mut registry = REGISTRY.lock().unwrap();
-        // Get type map
-        let map = registry
-            .get_mut(&TypeId::of::<T>())?
-            .downcast_mut::<HashMap<String, T>>()?;
-        // Get value
-        let value = map.get_mut(key)?;
-        Some(f(value))
+    pub fn remove(name: &str) -> Option<T> {
+        let type_id = TypeId::of::<T>();
+        let lock_value = {
+            let map = _TABLE.read().ok()?;
+            let type_map = map.get(&type_id)?;
+            let mut type_map = type_map.write().ok()?;
+            type_map.remove(name)?
+        };
+        let value = lock_value.into_inner().ok()?;
+        let type_value = value.downcast::<T>().ok()?;
+        Some(*type_value)
     }
 
-    /// Get the value with the given key and reomve it from the registry
-    ///
-    /// If the key does not exist, `None` will be returned.
-    ///
-    /// # Returns
-    /// `Some(T)` if the key exists, `None` otherwise.
-    ///
-    /// # Example
-    /// ```rust
-    /// use gom::Registry;
-    ///
-    /// Registry::register("key", 123);
-    /// let value = Registry::<i32>::remove("key");
-    /// assert_eq!(value, Some(123));
-    /// let value = Registry::<i32>::remove("key");
-    /// assert_eq!(value, None);
-    /// ```
-    pub fn remove(key: &str) -> Option<T> {
-        let mut registry = REGISTRY.lock().unwrap();
-        // Get type map
-        let map = registry
-            .get_mut(&TypeId::of::<T>())?
-            .downcast_mut::<HashMap<String, T>>()?;
-        // Get value
-        map.remove(key)
+    fn _exists(name: &str) -> Option<bool> {
+        let type_id = TypeId::of::<T>();
+        let map = _TABLE.read().ok()?;
+        let lock_type_map = map.get(&type_id)?;
+        let type_map = lock_type_map.read().ok()?;
+        Some(type_map.contains_key(name))
     }
 
-    /// Apply a function to the value with the given key
-    ///
-    /// **This function will not cause thread deadlocks.**
-    ///
-    /// If the key does not exist, the function will not be called and `None` will be returned.
-    ///
-    /// In the context of 'with', the value cannot be retrieved again.
-    ///
-    /// # Returns
-    /// `Some(R)` if the key exists and the function was applied successfully, `None` otherwise.
-    ///
-    /// # Example
-    /// ```rust
-    /// use gom::Registry;
-    ///
-    /// Registry::register("key", 123);
-    /// let value = Registry::<i32>::with("key", |v| *v + 1);
-    /// assert_eq!(value, Some(124));
-    /// ```
-    pub fn with<R, F: FnOnce(&mut T) -> R>(key: &str, f: F) -> Option<R> {
-        let mut value = Self::remove(key)?;
-        let result = f(&mut value);
-        Self::register(key, value);
-        Some(result)
+    pub fn exists(name: &str) -> bool {
+        Self::_exists(name).unwrap_or(false)
     }
 
-    fn _exists(key: &str) -> Option<bool> {
-        let registry = REGISTRY.lock().unwrap();
-        let map = registry
-            .get(&TypeId::of::<T>())?
-            .downcast_ref::<HashMap<String, T>>()?;
-        Some(map.contains_key(key))
+    pub fn apply<R, F: FnOnce(&mut T) -> R>(name: &str, func: F) -> Option<R> {
+        let type_id = TypeId::of::<T>();
+        let type_map = _TABLE.read().ok()?;
+        let type_map = type_map.get(&type_id)?.read().ok()?;
+        let mut value = type_map.get(name)?.write().ok()?;
+        let var = value.downcast_mut::<T>()?;
+        Some(func(var))
     }
 
-    /// Check if the key exists in the registry
-    ///
-    /// # Returns
-    /// `true` if the key exists, `false` otherwise.
-    ///
-    /// # Example
-    /// ```rust
-    /// use gom::Registry;
-    ///
-    /// Registry::register("key", 123);
-    /// assert_eq!(Registry::<i32>::exists("key"), true);
-    /// assert_eq!(Registry::<i32>::exists("other"), false);
-    /// ```
-    pub fn exists(key: &str) -> bool {
-        Self::_exists(key).unwrap_or(false)
+    pub fn with<R, F: FnOnce(&T) -> R>(name: &str, func: F) -> Option<R> {
+        let type_id = TypeId::of::<T>();
+        let type_map = _TABLE.read().ok()?;
+        let type_map = type_map.get(&type_id)?.read().ok()?;
+        let value = type_map.get(name)?.read().ok()?;
+        let var = value.downcast_ref::<T>()?;
+        Some(func(var))
     }
 
-    /// Take the value with the given key and replace it with the given value
-    ///
-    /// If the key does not exist, the value will be registered instead.
-    ///
-    /// # Returns
-    /// `Some(T)` if the key exists, `None` otherwise.
-    ///
-    /// # Example
-    /// ```rust
-    /// use gom::Registry;
-    ///
-    /// Registry::register("key", 123);
-    /// let value = Registry::<i32>::take("key", 456);
-    /// assert_eq!(value, Some(123));
-    /// let value = Registry::<i32>::take("key", 789);
-    /// assert_eq!(value, Some(456));
-    /// let value = Registry::<i32>::take("other", 101112);
-    /// assert_eq!(value, None);
-    /// ```
-    pub fn take(key: &str, value: T) -> Option<T> {
-        let before_value = Self::remove(key);
-        Self::register(key, value);
-        before_value
+    pub fn replace(name: &str, value: T) -> Option<T> {
+        let type_id = TypeId::of::<T>();
+        let type_map = _TABLE.read().ok()?;
+        let type_map = type_map.get(&type_id)?;
+        let value = {
+            let mut type_map = type_map.write().ok()?;
+            let ret = type_map.remove(name)?;
+            type_map.insert(String::from(name), RwLock::new(Box::new(value)));
+            ret
+        };
+        let value = value.into_inner().ok()?;
+        let type_value = value.downcast::<T>().ok()?;
+        Some(*type_value)
+    }
+
+    #[deprecated(since = "0.1.6", note = "use `replace` instead")]
+    pub fn take(name: &str, value: T) -> Option<T> {
+        Self::replace(name, value)
     }
 }
 
