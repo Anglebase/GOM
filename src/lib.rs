@@ -20,6 +20,11 @@ lazy_static! {
         RwLock::new(HashMap::new());
 }
 
+thread_local! {
+    static _LOCAL_TABLE: RefCell<HashMap<TypeId, HashMap<String, Box<dyn Any>>>> =
+        RefCell::new(HashMap::new());
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Context {
     With(String, TypeId),
@@ -282,6 +287,143 @@ impl<T: 'static + Send + Sync + Any> Registry<T> {
     #[deprecated(since = "0.1.6", note = "use `replace` instead")]
     pub fn take(name: &str, value: T) -> Option<T> {
         Self::replace(name, value)
+    }
+}
+
+/// 针对于线程局部变量的注册表
+pub struct LocalRegistry<T> {
+    _marker: PhantomData<T>,
+}
+
+impl<T: 'static> LocalRegistry<T> {
+    /// 向注册表中注册一个新值
+    ///
+    /// 如果相同的键已存在，那么旧值将会被新值替换
+    ///
+    /// # 示例
+    /// ```rust
+    /// use gom::LocalRegistry;
+    ///
+    /// LocalRegistry::<i32>::register("my_key", 42);
+    /// ```
+    pub fn register(name: &str, value: T) {
+        let type_id = TypeId::of::<T>();
+        let has_type = _LOCAL_TABLE.with_borrow(|table| table.contains_key(&type_id));
+        if !has_type {
+            _LOCAL_TABLE.with_borrow_mut(|table| {
+                table.insert(type_id, HashMap::new());
+            });
+        }
+        _LOCAL_TABLE.with_borrow_mut(|table| {
+            let type_map = table.get_mut(&type_id).unwrap();
+            type_map.insert(String::from(name), Box::new(value));
+        })
+    }
+
+    /// 从注册表中移除指定键对应的值
+    ///
+    /// 如果键不存在，则返回 `None`
+    ///
+    /// # 示例
+    /// ```rust
+    /// use gom::LocalRegistry;
+    ///
+    /// LocalRegistry::<i32>::register("my_key", 42);
+    /// assert_eq!(LocalRegistry::<i32>::remove("my_key"), Some(42));
+    /// assert_eq!(LocalRegistry::<i32>::remove("my_key"), None);
+    /// ```
+    pub fn remove(name: &str) -> Option<T> {
+        let type_id = TypeId::of::<T>();
+        let value = _LOCAL_TABLE.with_borrow_mut(|table| {
+            let type_map = table.get_mut(&type_id)?;
+            type_map.remove(name)
+        })?;
+        let value = value.downcast::<T>().ok()?;
+        Some(*value)
+    }
+
+    /// 判断指定键是否存在于注册表中
+    ///
+    /// # 示例
+    /// ```rust
+    /// use gom::LocalRegistry;
+    ///
+    /// LocalRegistry::<i32>::register("my_key", 42);
+    /// assert_eq!(LocalRegistry::<i32>::exists("my_key"), true);
+    /// assert_eq!(LocalRegistry::<i32>::exists("other_key"), false);
+    /// ```
+    pub fn exists(name: &str) -> bool {
+        let type_id = TypeId::of::<T>();
+        _LOCAL_TABLE.with_borrow(|table| {
+            let type_map = table.get(&type_id).unwrap();
+            type_map.contains_key(name)
+        })
+    }
+
+    /// 向注册表中的指定键应用一个函数，该函数可以修改注册表中的值
+    ///
+    /// 如果键不存在，则返回 `None`；否则，返回闭包函数的返回值
+    ///
+    /// # 示例
+    /// ```rust
+    /// use gom::LocalRegistry;
+    ///
+    /// LocalRegistry::register("my_key", 42);
+    /// assert_eq!(LocalRegistry::<i32>::apply("my_key", |v| { *v += 1; *v }), Some(43));
+    /// assert_eq!(LocalRegistry::<i32>::apply("other_key", |v| *v += 1), None);
+    /// ```
+    pub fn apply<R, F: FnOnce(&mut T) -> R>(name: &str, func: F) -> Option<R> {
+        let type_id = TypeId::of::<T>();
+        _LOCAL_TABLE.with_borrow_mut(|table| {
+            let type_map = table.get_mut(&type_id)?;
+            let value = type_map.get_mut(name)?;
+            let value = value.downcast_mut::<T>()?;
+            Some(func(value))
+        })
+    }
+
+    /// 向注册表中的指定键应用一个函数，该函数仅能读取注册表中的值
+    ///
+    /// 如果键不存在，则返回 `None`；否则，返回闭包函数的返回值
+    ///
+    /// # 示例
+    /// ```rust
+    /// use gom::LocalRegistry;
+    ///
+    /// LocalRegistry::<i32>::register("my_key", 42);
+    /// assert_eq!(LocalRegistry::<i32>::with("my_key", |v| *v), Some(42));
+    /// assert_eq!(LocalRegistry::<i32>::with("other_key", |v| *v), None);
+    /// ```
+    pub fn with<R, F: FnOnce(&T) -> R>(name: &str, func: F) -> Option<R> {
+        let type_id = TypeId::of::<T>();
+        _LOCAL_TABLE.with_borrow(|table| {
+            let type_map = table.get(&type_id)?;
+            let value = type_map.get(name)?;
+            let value = value.downcast_ref::<T>()?;
+            Some(func(value))
+        })
+    }
+
+    /// 使用新值替换注册表中的指定键对应的值
+    ///
+    /// 如果键不存在，则返回 `None` 并且不会注册新值；否则，返回旧值
+    ///
+    /// # 示例
+    /// ```rust
+    /// use gom::LocalRegistry;
+    ///
+    /// LocalRegistry::<i32>::register("my_key", 42);
+    /// assert_eq!(LocalRegistry::<i32>::replace("my_key", 64), Some(42));
+    /// assert_eq!(LocalRegistry::<i32>::replace("other_key", 32), None);
+    /// ```
+    pub fn replace(name: &str, value: T) -> Option<T> {
+        let type_id = TypeId::of::<T>();
+        let value = _LOCAL_TABLE.with_borrow_mut(|table| {
+            let type_map = table.get_mut(&type_id)?;
+            type_map.insert(name.to_string(), Box::new(value))
+        })?;
+        let value = value.downcast::<T>().ok()?;
+        Some(*value)
     }
 }
 
